@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Betnix Mail</title>
+<link rel="stylesheet" href="style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+
+<div id="loginPage">
+  <h1>Login to Betnix Mail</h1>
+  <input id="loginEmail" placeholder="Email">
+  <input id="loginPassword" type="password" placeholder="Password">
+  <button onclick="login()">Login</button>
+  <p>Don't have an account? <span onclick="showSignup()">Sign up</span></p>
+  <div id="loginMsg" class="message"></div>
+</div>
+
+<div id="signupPage" style="display:none">
+  <h1>Create Betnix Account</h1>
+  <input id="signupName" placeholder="Name">
+  <input id="signupEmail" placeholder="Email">
+  <input id="signupPassword" type="password" placeholder="Password">
+  <button onclick="signup()">Sign Up</button>
+  <p>Already have an account? <span onclick="showLogin()">Login</span></p>
+  <div id="signupMsg" class="message"></div>
+</div>
+
+<div id="mailApp" style="display:none">
+  <header>
+    <h1>Betnix Mail</h1>
+    <div id="userInfo"></div>
+    <button onclick="logout()">Logout</button>
+  </header>
+
+  <nav>
+    <button onclick="loadFolder('Inbox')">Inbox</button>
+    <button onclick="loadFolder('Sent')">Sent</button>
+    <button onclick="loadFolder('Drafts')">Drafts</button>
+    <button onclick="loadFolder('Trash')">Trash</button>
+    <button onclick="showCompose()">Compose</button>
+    <input id="searchBox" placeholder="Search emails" oninput="searchEmails()">
+  </nav>
+
+  <div id="composePage" style="display:none">
+    <input id="to" placeholder="To">
+    <input id="subject" placeholder="Subject">
+    <textarea id="body" placeholder="Body"></textarea>
+    <button onclick="sendEmail()">Send</button>
+    <button onclick="saveDraft()">Save Draft</button>
+    <button onclick="hideCompose()">Cancel</button>
+  </div>
+
+  <div id="emailList"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
