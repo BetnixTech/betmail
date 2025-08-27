@@ -1,106 +1,142 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
+import json
+import os
+import smtplib, ssl
 from werkzeug.security import generate_password_hash, check_password_hash
-import sqlite3, smtplib, ssl, os
 
 app = Flask(__name__)
-DB_FILE = "webmail.db"
 
-def init_db():
-    if not os.path.exists(DB_FILE):
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute('''CREATE TABLE users
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT UNIQUE, password TEXT)''')
-        c.execute('''CREATE TABLE emails
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT, recipient TEXT, subject TEXT, body TEXT, draft INTEGER DEFAULT 0, trash INTEGER DEFAULT 0, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-        conn.commit()
-        conn.close()
+# ----------------------------
+# Setup paths
+# ----------------------------
+DATA_FOLDER = "data"
+USERS_FILE = os.path.join(DATA_FOLDER, "users.json")
+INBOX_FILE = os.path.join(DATA_FOLDER, "inbox.json")
+os.makedirs(DATA_FOLDER, exist_ok=True)
 
-init_db()
+# Initialize JSON files if they don't exist
+for f, default in [(USERS_FILE, {}), (INBOX_FILE, {})]:
+    if not os.path.exists(f):
+        with open(f, "w") as fp:
+            json.dump(default, fp)
 
-@app.route("/")
-def index():
-    return send_from_directory("", "index.html")
+# ----------------------------
+# Helper functions
+# ----------------------------
+def load_json(path):
+    with open(path, "r") as fp:
+        return json.load(fp)
 
-@app.route("/<path:path>")
-def serve_file(path):
-    return send_from_directory("", path)
+def save_json(path, data):
+    with open(path, "w") as fp:
+        json.dump(data, fp, indent=2)
 
+# ----------------------------
+# SMTP send email (any provider)
+# ----------------------------
+def send_email_smtp(from_email, password, to_email, subject, body, smtp_server, port=465, use_ssl=True):
+    message = f"From: {from_email}\nTo: {to_email}\nSubject: {subject}\n\n{body}"
+
+    try:
+        if use_ssl:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_server, port, context=context) as server:
+                server.login(from_email, password)
+                server.sendmail(from_email, to_email, message)
+        else:
+            server = smtplib.SMTP(smtp_server, port)
+            server.starttls(context=ssl.create_default_context())
+            server.login(from_email, password)
+            server.sendmail(from_email, to_email, message)
+            server.quit()
+        print(f"Email sent to {to_email} via {smtp_server}")
+        return True, "Email sent"
+    except Exception as e:
+        print("Error sending email:", e)
+        return False, str(e)
+
+# ----------------------------
+# Routes
+# ----------------------------
 @app.route("/signup", methods=["POST"])
 def signup():
     data = request.json
-    hashed = generate_password_hash(data["password"])
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users (name,email,password) VALUES (?,?,?)", (data["name"], data["email"], hashed))
-        conn.commit()
-        return jsonify({"status":"ok"})
-    except sqlite3.IntegrityError:
-        return jsonify({"status":"error","message":"Email already registered"}), 400
-    finally:
-        conn.close()
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"success": False, "message": "Missing email or password"}), 400
+
+    users = load_json(USERS_FILE)
+    if email in users:
+        return jsonify({"success": False, "message": "Email already exists"}), 400
+
+    users[email] = {"password": generate_password_hash(password)}
+    save_json(USERS_FILE, users)
+    return jsonify({"success": True, "message": "Signup successful"}), 200
 
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT password, name FROM users WHERE email=?", (data["email"],))
-    row = c.fetchone()
-    conn.close()
-    if row and check_password_hash(row[0], data["password"]):
-        return jsonify({"status":"ok", "name": row[1]})
-    else:
-        return jsonify({"status":"error","message":"Invalid login"}), 400
+    email = data.get("email")
+    password = data.get("password")
 
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465
-SMTP_USER = "YOUR_EMAIL@gmail.com"
-SMTP_PASS = "YOUR_PASSWORD"
+    users = load_json(USERS_FILE)
+    if email not in users or not check_password_hash(users[email]["password"], password):
+        return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
-def send_smtp(to_addr, subject, body):
-    message = f"Subject: {subject}\n\n{body}"
-    context = ssl.create_default_context()
-    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
-        server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(SMTP_USER, to_addr, message)
+    return jsonify({"success": True, "message": "Login successful"}), 200
 
 @app.route("/send", methods=["POST"])
 def send_email():
     data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO emails (sender,recipient,subject,body,draft) VALUES (?,?,?,?,?)",
-              (data["from"], data["to"], data["subject"], data["body"], 1 if data.get("draft") else 0))
-    conn.commit()
-    conn.close()
-    if not data.get("draft"):
-        try:
-            send_smtp(data["to"], data["subject"], data["body"])
-        except Exception as e:
-            print("SMTP error:", e)
-    return jsonify({"status":"ok"})
+    required_fields = ["from_email", "password", "to_email", "subject", "body", "smtp_server"]
+    if any(field not in data for field in required_fields):
+        return jsonify({"success": False, "message": "Missing required fields"}), 400
 
-@app.route("/emails/<email>")
-def get_emails(email):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT id,sender,recipient,subject,body,draft,trash,timestamp FROM emails WHERE sender=? OR recipient=? ORDER BY timestamp DESC", (email,email))
-    rows = c.fetchall()
-    conn.close()
-    emails = [{"id":r[0],"from":r[1],"to":r[2],"subject":r[3],"body":r[4],"draft":r[5],"trash":r[6],"timestamp":r[7]} for r in rows]
-    return jsonify(emails)
+    ok, msg = send_email_smtp(
+        from_email=data["from_email"],
+        password=data["password"],
+        to_email=data["to_email"],
+        subject=data["subject"],
+        body=data["body"],
+        smtp_server=data["smtp_server"],
+        port=data.get("port", 465),
+        use_ssl=data.get("use_ssl", True)
+    )
+
+    # Save sent email locally
+    inbox = load_json(INBOX_FILE)
+    inbox.setdefault(data["from_email"], []).append({
+        "to": data["to_email"],
+        "subject": data["subject"],
+        "body": data["body"]
+    })
+    save_json(INBOX_FILE, inbox)
+
+    return jsonify({"success": ok, "message": msg})
+
+@app.route("/inbox/<email>", methods=["GET"])
+def inbox(email):
+    inbox = load_json(INBOX_FILE)
+    return jsonify(inbox.get(email, []))
 
 @app.route("/delete", methods=["POST"])
 def delete_email():
     data = request.json
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("UPDATE emails SET trash=1 WHERE id=?", (data["id"],))
-    conn.commit()
-    conn.close()
-    return jsonify({"status":"ok"})
+    user_email = data.get("email")
+    index = data.get("index")
+    inbox = load_json(INBOX_FILE)
 
+    if user_email not in inbox or index is None or index >= len(inbox[user_email]):
+        return jsonify({"success": False, "message": "Email not found"}), 404
+
+    inbox[user_email].pop(index)
+    save_json(INBOX_FILE, inbox)
+    return jsonify({"success": True, "message": "Email deleted"})
+
+# ----------------------------
+# Run server
+# ----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
